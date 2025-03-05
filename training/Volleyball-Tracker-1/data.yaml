@@ -1,0 +1,12 @@
+names:
+- ball
+nc: 1
+roboflow:
+  license: CC BY 4.0
+  project: volleyball-tracker
+  url: https://universe.roboflow.com/volleyball-analyser/volleyball-tracker/dataset/1
+  version: 1
+  workspace: volleyball-analyser
+test: ../test/images
+train: Volleyball-Tracker-1/train/images
+val: Volleyball-Tracker-1/valid/images
