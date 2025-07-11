@@ -1,4 +1,4 @@
-# Volleyball Analysis System 🎯🏐
+# VolleyTrackr 🎯🏐
 
 A cutting-edge computer vision application that uses YOLO (You Only Look Once) and advanced image processing to track volleyballs in real-time, determine ball and player positions, and analyze whether the ball is **in** or **out** during gameplay.
 
