@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.python-version
+
+# Tests / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Runtime outputs
+output_videos/*
+!output_videos/.gitkeep
+tracker_stubs/*.pkl
+input_videos/court_keypoints.json
+input_videos/input_picture*.PNG
+court_boundary_output.jpg
+runs/
+
+# Large local artifacts (keep models you intentionally track)
+*.avi
+*.mkv
+*.mp4
+*.webm
+*.pt
+!models/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Scratch
+tempCodeRunnerFile.py

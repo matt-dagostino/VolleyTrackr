@@ -1,20 +1,73 @@
-import cv2
+from __future__ import annotations
 
-def read_video(video_path):
-    video = cv2.VideoCapture(video_path)
-    frames = []
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import cv2
+import numpy as np
+
+
+def read_video(
+    video_path: str,
+    max_frames: Optional[int] = None,
+) -> Tuple[List[np.ndarray], float]:
+    """
+    Load frames from a video file.
+
+    Returns:
+        frames: list of BGR frames
+        fps: source frames-per-second (falls back to 24.0)
+    """
+    path = Path(video_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Input video not found: {video_path}")
+
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        raise RuntimeError(f"Unable to open video: {video_path}")
+
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    if fps <= 1e-3:
+        fps = 24.0
+
+    frames: List[np.ndarray] = []
     while True:
-        ret, frame = video.read()
-        if not ret:
+        ok, frame = capture.read()
+        if not ok:
             break
         frames.append(frame)
-    video.release()
-    return frames
+        if max_frames is not None and len(frames) >= max_frames:
+            break
 
-def save_video(output_video_frames, output_video_path):
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    out = cv2.VideoWriter(output_video_path, fourcc, 24, (output_video_frames[0].shape[1], output_video_frames[0].shape[0]))
+    capture.release()
+
+    if not frames:
+        raise RuntimeError(f"No frames decoded from video: {video_path}")
+
+    return frames, fps
+
+
+def save_video(
+    output_video_frames: List[np.ndarray],
+    output_video_path: str,
+    fps: float = 24.0,
+) -> None:
+    if not output_video_frames:
+        raise ValueError("Cannot save empty frame list")
+
+    output_path = Path(output_video_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    height, width = output_video_frames[0].shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    writer = cv2.VideoWriter(str(output_path), fourcc, float(fps), (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"Unable to open VideoWriter for {output_video_path}")
+
     for frame in output_video_frames:
-        out.write(frame)
-    out.release()
-    print(f"Video saved as '{output_video_path}'")
+        if frame.shape[0] != height or frame.shape[1] != width:
+            frame = cv2.resize(frame, (width, height))
+        writer.write(frame)
+
+    writer.release()
+    print(f"Video saved as '{output_path}' ({len(output_video_frames)} frames @ {fps:.2f} FPS)")

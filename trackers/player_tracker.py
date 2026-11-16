@@ -1,88 +1,130 @@
-from ultralytics import YOLO
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence
+
 import cv2
 import pickle
-import sys
 import numpy as np
-sys.path.append('../')
+
+from constants import DEFAULT_PLAYER_CONFIDENCE, MAX_PLAYERS_ON_COURT
 from utils import measure_distance, get_centre_of_bbox
 
+
 class PlayerTracker:
-    def __init__(self, model_path):
-        self.model = YOLO(model_path)
+    def __init__(
+        self,
+        model_path: str = "yolov8x",
+        conf: float = DEFAULT_PLAYER_CONFIDENCE,
+        max_players: int = MAX_PLAYERS_ON_COURT,
+        load_model: bool = True,
+    ):
+        self.model_path = model_path
+        self.conf = conf
+        self.max_players = max_players
+        self.model = None
+        if load_model:
+            self._ensure_model()
 
-    def choose_and_filter_players(self, court_keypoints, player_detections):
-        player_detections_first_frame=player_detections[0]
-        chosen_player = self.choose_player(court_keypoints, player_detections_first_frame)
-        filtered_player_detections = []
+    def _ensure_model(self) -> None:
+        if self.model is not None:
+            return
+        from ultralytics import YOLO  # lazy import — keeps unit tests light
+
+        self.model = YOLO(self.model_path)
+
+    def choose_and_filter_players(self, court_keypoints, player_detections: Sequence[dict]) -> List[dict]:
+        if not player_detections:
+            return []
+        chosen_players = set(self.choose_player(court_keypoints, player_detections[0]))
+        filtered = []
         for player_dict in player_detections:
-            filtered_player_dict = {track_id: bbox for track_id, bbox in player_dict.items() if track_id in chosen_player}
-            filtered_player_detections.append(filtered_player_dict)
-        return filtered_player_detections
+            filtered.append(
+                {
+                    track_id: bbox
+                    for track_id, bbox in player_dict.items()
+                    if track_id in chosen_players
+                }
+            )
+        return filtered
 
-    def choose_player(self, court_keypoints, player_dict):
+    def choose_player(self, court_keypoints, player_dict: dict) -> List[int]:
+        if not player_dict:
+            return []
+
+        keypoints = np.asarray(court_keypoints, dtype=np.float32).reshape(-1, 2)
         distances = []
         for track_id, bbox in player_dict.items():
             player_centre = get_centre_of_bbox(bbox)
-
-            court_keypoints = np.array(court_keypoints)
-            court_keypoints = court_keypoints.reshape(-1).tolist()
-
-            min_distance = float('inf')
-            for i in range(0, len(court_keypoints), 2):
-                court_keypoint = (court_keypoints[i], court_keypoints[i+1])
-                distance = measure_distance(player_centre, court_keypoint)
-                if distance < min_distance:
-                    min_distance = distance
+            min_distance = min(
+                measure_distance(player_centre, (float(x), float(y)))
+                for x, y in keypoints
+            )
             distances.append((track_id, min_distance))
 
-        distances.sort(key=lambda x: x[1])
+        distances.sort(key=lambda item: item[1])
+        limit = min(self.max_players, len(distances))
+        return [distances[i][0] for i in range(limit)]
 
-        #Choose the top 12 players
-        chosen_players = [distances[i][0] for i in range(12)]
-        return chosen_players
+    def detect_frames(
+        self,
+        frames: Sequence,
+        read_from_stub: bool = False,
+        stub_path: Optional[str] = None,
+    ) -> List[dict]:
+        if read_from_stub:
+            if not stub_path:
+                raise ValueError("stub_path is required when read_from_stub=True")
+            with open(stub_path, "rb") as handle:
+                return pickle.load(handle)
 
-    def detect_frames(self, frames, read_from_stub=False, stub_path=None):
-        player_detections = []
-
-        if read_from_stub and stub_path is not None:
-            with open(stub_path, 'rb') as f:
-                player_detections = pickle.load(f)
-            return player_detections
-
-        for frame in frames:
-            player_dict = self.detect_frame(frame)
-            player_detections.append(player_dict)
+        player_detections = [self.detect_frame(frame) for frame in frames]
 
         if stub_path is not None:
-            with open(stub_path, 'wb') as f:
-                pickle.dump(player_detections, f)
+            Path(stub_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(stub_path, "wb") as handle:
+                pickle.dump(player_detections, handle)
 
         return player_detections
 
-    def detect_frame(self, frame):
-        results = self.model.track(frame, persist=True)[0]
+    def detect_frame(self, frame) -> Dict[int, List[float]]:
+        self._ensure_model()
+        results = self.model.track(
+            frame,
+            persist=True,
+            conf=self.conf,
+            classes=[0],  # COCO person
+            verbose=False,
+        )[0]
         id_name_dict = results.names
+        player_dict: Dict[int, List[float]] = {}
 
-        player_dict = {}
         for box in results.boxes:
+            if box.id is None:
+                continue
             track_id = int(box.id.tolist()[0])
-            result = box.xyxy.tolist()[0]
-            object_cls_id = box.cls.tolist()[0]
-            object_cls_name = id_name_dict[object_cls_id]
-            if object_cls_name == "person":
-                player_dict[track_id] = result
+            cls_id = int(box.cls.tolist()[0])
+            cls_name = id_name_dict.get(cls_id, "")
+            if cls_name != "person":
+                continue
+            player_dict[track_id] = box.xyxy.tolist()[0]
 
         return player_dict
-    
-    def draw_bounding_boxes(self, video_frames, player_detections):
+
+    def draw_bounding_boxes(self, video_frames: Sequence, player_detections: Sequence[dict]):
         output_video_frames = []
         for frame, player_dict in zip(video_frames, player_detections):
-            # Draw Bounding Boxes
             for track_id, bbox in player_dict.items():
                 x1, y1, x2, y2 = bbox
-                cv2.putText(frame, f"Player ID: {track_id}", (int(bbox[0]), int(bbox[1] - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                cv2.putText(
+                    frame,
+                    f"P{track_id}",
+                    (int(x1), int(y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    2,
+                )
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
             output_video_frames.append(frame)
-
         return output_video_frames
-    
