@@ -1,13 +1,28 @@
+"""Quick smoke test for the trained ball detector."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
 from ultralytics import YOLO
 
-model = YOLO('models/best.pt')
 
-# Run inference on a single image
-result = model.predict('input_videos/input_video.webm', conf=0.2, save=True)
-#result = model.predict('input_videos/blockbusters.mkv', conf=0.2, save=True)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run YOLO ball inference on a video")
+    parser.add_argument("--model", default="models/best_100.pt")
+    parser.add_argument("--source", default="input_videos/input_video.webm")
+    parser.add_argument("--conf", type=float, default=0.2)
+    args = parser.parse_args()
 
-print(result)
-for box in result[0].boxes:
-    print(box)
+    if not Path(args.model).exists():
+        raise FileNotFoundError(f"Model not found: {args.model}")
+    if not Path(args.source).exists():
+        raise FileNotFoundError(f"Source not found: {args.source}")
 
-    
+    model = YOLO(args.model)
+    model.predict(args.source, conf=args.conf, save=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,68 +1,100 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Optional, Union
+
 import cv2
-import numpy as np
-import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
+import numpy as np
+
 
 class CourtLineDetector:
-    def __init__(self):
-        self.transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+    """
+    Manual 4-corner court selection.
 
-    def predict(self, image_path):
-        # Load the reference image
-        image_default = cv2.imread(image_path)
-        img_rgb = cv2.cvtColor(image_default, cv2.COLOR_BGR2RGB)
-        image = self.transform(img_rgb).unsqueeze(0)
+    Supports interactive clicking or loading/saving keypoints JSON so batch
+    runs can skip the GUI after the first calibration.
+    """
 
-        # Show image and let user select 4 points
+    def predict(
+        self,
+        image: Union[str, np.ndarray],
+        keypoints_path: Optional[str] = None,
+        save_keypoints_path: Optional[str] = None,
+    ) -> np.ndarray:
+        if keypoints_path and Path(keypoints_path).exists():
+            keypoints = self.load_keypoints(keypoints_path)
+            if save_keypoints_path:
+                self.save_keypoints(keypoints, save_keypoints_path)
+            return keypoints
+
+        image_bgr = self._load_image(image)
+        img_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+
+        plt.figure(figsize=(12, 7))
         plt.imshow(img_rgb)
-        plt.title("Click on 4 corners of the court")
+        plt.title("Click 4 corners in order: TL → TR → BR → BL")
         plt.axis("on")
-
-        # Get user input for 4 corners
         points = plt.ginput(4, timeout=0)
         plt.close()
 
-        # Convert points to NumPy array
-        keypoints = np.array(points, np.int32).reshape((-1, 1, 2))
-        
-        #original_h, original_w = img_rgb.shape[:2]
-        # keypoints[::2] *= original_w/224.0
-        # keypoints[1::2] *= original_h/224.0
+        if len(points) != 4:
+            raise RuntimeError(f"Expected 4 court corners, received {len(points)}")
+
+        keypoints = np.array(points, dtype=np.float32).reshape((-1, 1, 2))
+
+        target = save_keypoints_path or keypoints_path
+        if target:
+            self.save_keypoints(keypoints, target)
 
         return keypoints
-    
-    # def draw_keypoints(self, image, keypoints):
-    #     for i in range(0, len(keypoints), 2):
-    #         x, y = int(keypoints[i]), int(keypoints[i+1])
-            
-    #         cv2.putText(image, str(i//2), (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    #         cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
-    #     return image
 
-    def draw_keypoints(self, image, keypoints):
-    # Loop through each keypoint
-        for i, point in enumerate(keypoints):
-            # Extract x, y coordinates from the keypoint (which is a nested list)
+    @staticmethod
+    def _load_image(image: Union[str, np.ndarray]) -> np.ndarray:
+        if isinstance(image, np.ndarray):
+            return image
+        path = Path(image)
+        if not path.exists():
+            raise FileNotFoundError(f"Court reference image not found: {image}")
+        loaded = cv2.imread(str(path))
+        if loaded is None:
+            raise RuntimeError(f"Failed to read image: {image}")
+        return loaded
+
+    @staticmethod
+    def load_keypoints(path: Union[str, Path]) -> np.ndarray:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        points = data["keypoints"] if isinstance(data, dict) else data
+        return np.asarray(points, dtype=np.float32).reshape((-1, 1, 2))
+
+    @staticmethod
+    def save_keypoints(keypoints: np.ndarray, path: Union[str, Path]) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        flat = np.asarray(keypoints, dtype=np.float32).reshape(-1, 2).tolist()
+        path.write_text(json.dumps({"keypoints": flat}, indent=2), encoding="utf-8")
+
+    def draw_keypoints(self, image: np.ndarray, keypoints: np.ndarray) -> np.ndarray:
+        polygon = np.asarray(keypoints, dtype=np.int32).reshape((-1, 1, 2))
+        cv2.polylines(image, [polygon], isClosed=True, color=(0, 255, 255), thickness=2)
+
+        for i, point in enumerate(polygon):
             x, y = int(point[0][0]), int(point[0][1])
-            
-            # Add a label next to the point
-            cv2.putText(image, str(i), (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-            
-            # Draw a circle around the point
+            cv2.putText(
+                image,
+                str(i),
+                (x + 6, y - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 255),
+                2,
+            )
             cv2.circle(image, (x, y), 5, (0, 255, 255), -1)
-
-            cv2.polylines(image, [keypoints], isClosed=True, color=(0, 255, 255), thickness=1)
-
         return image
-    
+
     def draw_keypoints_on_video(self, video_frames, keypoints):
         output_video_frames = []
         for frame in video_frames:
-            frame = self.draw_keypoints(frame, keypoints)
-            output_video_frames.append(frame)
+            output_video_frames.append(self.draw_keypoints(frame, keypoints))
         return output_video_frames
